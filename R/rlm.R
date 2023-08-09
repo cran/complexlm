@@ -33,7 +33,18 @@
 #' algorithm are defined over the set of complex numbers. While ordering is not defined for them, it is the output of rho(), a real number, that must be 
 #' in M-estimation.
 #' 
-#' @return An object of class "rzlm" or "rlm", which inherits from "lm", 
+#' @return An object of class `c("rzlm", "zlm", "rlm", "lm")`, or for numeric data `c("rlm", "lm")`.
+#' 
+#' Objects of class "rzlm" are lists with the same components as "zlm" objects, as well as,
+#' \item{`df.residual`}{`NA` For "rzlm" objects the residual degrees of freedom are always set to `NA` in order to avoid estimation of residual scale by "zlm" or "lm" methods.}
+#' \item{`s`}{The robust scale estimate used.}
+#' \item{`w`}{The weights used in the IWLS process.}
+#' \item{`psi`}{The psi (itterative weighting) function with parameters substituted in.}
+#' \item{`conv`}{The value of the convergence criteria at each iteration.}
+#' \item{`converged`}{Did the IWLS process converge?}
+#' \item{`wresid`}{A 'working residual', the residuals of the last re-weighted least-squares. Weighted by `weights` if "inv.var" weights were used. }
+#' 
+#' See [MASS::rlm] for a description of "rlm" objects.
 #' 
 #' @export
 rlm <- function(x, ...) UseMethod("rlm")
@@ -73,7 +84,7 @@ rlm.formula <-
     trms <- terms(formula)
     respname <- as.character(attr(trms, "variables")[[attr(trms, "response") + 1]])
     cl <- match.call()
-    if (is.complex(data[,respname]) == FALSE)
+    if (is.complex(data[[1,respname]]) == FALSE) # Now compatible with tibble input.
     {
       cl[[1]] <- MASS::rlm
       eval(cl, parent.frame())
@@ -164,8 +175,9 @@ rlm.complex <-
       attr(xx, "assign") <- c(0,1)
       x <- xx
     }
-  irls.delta <- function(old, new)
+  irls.delta <- function(old, new) {
     as.numeric(sqrt(sum(Conj(old - new)*(old - new))/max(1e-20, as.numeric(sum(Conj(old)*old)))))
+  }
     irls.rrxwr <- function(x, w, r)
     {
         w <- sqrt(w)
@@ -232,21 +244,25 @@ rlm.complex <-
             resid <- drop(y - x %*% coef)
         }
     } else if(method == "MM") {
-        scale.est <- "MM"
-        temp <- do.call("lqs",
-                        c(list(x, y, intercept = interc, method = "S",
-                               k0 = 1.548), lqs.control))
-        coef <- temp$coefficients
-        resid <- temp$residuals
-        psi <- psi.bisquare
-        if(length(arguments <- list(...)))
-            if(match("c", names(arguments), nomatch = 0L)) {
-                c0 <- arguments$c
-                if (c0 > 1.548) formals(psi)$c <- c0
-                else
-                    warning("'c' must be at least 1.548 and has been ignored")
-            }
-        scale <- temp$scale
+        stop("'method' = 'MM' is not supported for complex numbers.
+             MM-estimation requires that quantiles be defined over the domain and co-domain of the model.
+             Please use 'method' = 'M' instead. If you require S-estimation or MM-estimation, and have a good complex quantile function you would like to use,
+             please contact the developer.")
+        # scale.est <- "MM"
+        # temp <- do.call("lqs",
+        #                 c(list(x, y, intercept = interc, method = "S",
+        #                        k0 = 1.548), lqs.control))
+        # coef <- temp$coefficients
+        # resid <- temp$residuals
+        # psi <- psi.bisquare
+        # if(length(arguments <- list(...)))
+        #     if(match("c", names(arguments), nomatch = 0L)) {
+        #         c0 <- arguments$c
+        #         if (c0 > 1.548) formals(psi)$c <- c0
+        #         else
+        #             warning("'c' must be at least 1.548 and has been ignored")
+        #     }
+        # scale <- temp$scale
     } else stop("'method' is unknown")
 
     done <- FALSE
@@ -266,7 +282,7 @@ rlm.complex <-
         if(!is.null(test.vec)) testpv <- get(test.vec)
         if(scale.est != "MM") {
             scale <- if(scale.est == "MAD")
-                if(is.null(wt)) median(abs(resid))/0.6745 else wmedian(abs(resid), wt)/0.6745 ## wmad does not actually find the weighted MAD!!!! It just finds the weighted median!
+                if(is.null(wt)) median(abs(resid))/0.6745 else wmedian(abs(resid), wt)/0.6745 # This is the median absolute deviation from the last fit, not the more standard median absolute deviation from the median.
             #else if(is.null(wt)) ## The two lines below are the Huber proposal 2 scale estimate. Why they didn't use the Huber function included in the package elsewhere is beyond me...
             #    sqrt(sum(pmin(Conj(resid)*resid, Conj(k2 * scale)*(k2 * scale)))/(n1*gamma))
             #else sqrt(sum(wt*pmin(Conj(resid)*resid, Conj(k2 * scale)*(k2 * scale)))/(n1*gamma))
@@ -338,7 +354,7 @@ rlm.complex <-
 #' Summary method for objects of class "rzlm", capable of processing complex variable fits. 
 #' If the residuals in the passed object are numeric, this function just calls [MASS::summary.rlm()].
 #'
-#' @param object An object inheriting from the class rlm. That is, a fitted model that was generated by rlm. The fitted data can have been numeric or complex.
+#' @param object An object inheriting from the class 'rzlm'. That is, a fitted model that was generated by [complexlm::rlm].
 #' @param method Character string indicating if the IWLS weights should be used when calculating matrix cross-products. "XtX" does not include weights, "XtWX" does.
 #' @param correlation Logical. Should the correlations be computed and printed?
 #' @param ... Other arguments, passed to or from other methods.
@@ -382,14 +398,15 @@ summary.rzlm <- function(object, method = c("XtX", "XtWX"),
 {
       method <- match.arg(method)
       s <- object$s
-      coef <- object$coefficients
+      p <- object$rank
+      coef <- object$coefficients[object$qr$pivot[1L:p]] # Pivot coefficients to account for pivoting in qr.
       ptotal <- length(coef)
       wresid <- object$wresid
       res <- object$residuals
       n <- length(wresid)
       if(any(na <- is.na(coef))) coef <- coef[!na]
       cnames <- names(coef)
-      p <- length(coef)
+      #p <- length(coef)
       rinv <- diag(p)
       dimnames(rinv) <- list(cnames, cnames)
       wts <- if(length(object$weights)) object$weights else rep(1, n)
@@ -420,7 +437,7 @@ summary.rzlm <- function(object, method = c("XtX", "XtWX"),
         psiprime <- object$psi(wresid/s, deriv=1) # The derivative of the influence function.
         mn <- mean(psiprime)
         pvarpsi <- sum((psiprime - mn)^2)/(n-1)
-        kappa <- 1 + p*as.numeric(var(psiprime))/(n*as.numeric(Conj(mn)*mn)) # This has something to do with propagation of uncertainty, I think.
+        kappa <- 1 + p*complexlm::var(psiprime)/(n*as.numeric(Conj(mn)*mn)) # This has something to do with propagation of uncertainty, I think. 
         #print(var(psiprime))
         pkappa <- 1 + p*pvarpsi/(n*mn^2)
         stddev <- sqrt(S)*(kappa/abs(mn)) ## Would it be useful to do something similar with pseudo-variance? Probably.
@@ -448,6 +465,7 @@ summary.rzlm <- function(object, method = c("XtX", "XtWX"),
         pcorrel <- NULL
       }
       coef <- array(coef, c(p, 4L)) # Make an array with 4 columns and p rows. put the coefficients into the first column.
+      #dimnames(coef) <- list(rev(cnames), c("Value", "Std. Error", "Pseudo Std. Error", "t value")) # The way that list() orders cnames seems to be opposite that of matrix algebra, so we need rev() to assign them properly.
       dimnames(coef) <- list(cnames, c("Value", "Std. Error", "Pseudo Std. Error", "t value"))
       #print(rinv)
       coef[, 2] <- rowlen %o% stddev # Fill the 2nd column of the coef array. These should be real numbers. Isn't stddev a single number? What is the point of the outer product? It transposes the vector into a column while multiplying all elements by stddev.
@@ -457,8 +475,8 @@ summary.rzlm <- function(object, method = c("XtX", "XtWX"),
       object$residuals <- res
       object$coefficients <- coef
       object$sigma <- s
-      print(var(psiprime))
-      print(stddev)
+      #print(var(psiprime))
+      #print(stddev)
       object$stddev <- stddev
       object$pstdev <- pstddev
       object$df <- c(p, rdf, ptotal)
@@ -468,64 +486,13 @@ summary.rzlm <- function(object, method = c("XtX", "XtWX"),
       object$correlation <- correl
       object$pseudocorrelation <- pcorrel
       object$terms <- NA
-      class(object) <- c("summary.rzlm", "summary.rlm", "summary.zlm")
+      class(object) <- c("summary.rzlm", "summary.zlm", "summary.rlm")
       return(object)
 }
 
-#' @describeIn summary.rzlm Print the summary of a (possibly complex) robust linear fit.
-#' 
-#' @param x a rzlm object or an rzlm summary object. Used for `print.summary.rlm` 
-#' @param digits the number of digits to include in the printed report, default is three. Used for `print.summary.rlm`
-#' 
-#' @note For complex fits the quantiles reported by this function are based on sorting the real parts of the residuals. They should not be considered reliable..
-#' 
-#' @export
-print.summary.rzlm <- function(x, digits = max(3, .Options$digits - 3), ...)
-{
-    cll <- match.call()
-    cat("\nCall: ")
-    dput(x$call, control=NULL)
-    resid <- x$residuals
-    df <- x$df
-    if (length(x$df) == 1) rdf <- df
-      else rdf <- df[2L]
-    print(rdf)
-    cat(if(!is.null(x$weights) && diff(range(x$weights))) "Weighted ",
-        "Residuals:\n", sep="")
-    if(rdf > 5L) {
-        if(length(dim(resid)) == 2L) {
-            rq <- apply(Conj(t(resid)), 1L, quantile)
-            dimnames(rq) <- list(c("Min", "1Q", "Median", "3Q", "Max"),
-                                 colnames(resid))
-        } else {
-            rq <- quantile(resid)
-            names(rq) <- c("Min", "1Q", "Median", "3Q", "Max")
-        }
-        print(rq, digits = digits, ...)
-    } else if(rdf > 0L) {
-        print(resid, digits = digits, ...)
-    }
-    print("NOTE: Quantiles generated by sorting real components only. Do not rely upon them.")
-    if(nsingular <- df[3L] - df[1L])
-        cat("\nCoefficients: (", nsingular,
-            " not defined because of singularities)\n", sep = "")
-    else cat("\nCoefficients:\n")
-    print(format(round(x$coefficients, digits = digits)), quote = FALSE, ...)
-    cat("\nResidual standard error:", format(signif(x$sigma, digits)),
-        "on", rdf, "degrees of freedom\n")
-    if(nzchar(mess <- naprint(x$na.action))) cat("  (", mess, ")\n", sep="")
-    if(!is.null(correl <- x$correlation)) {
-      p <- dim(correl)[2L]
-        if(p > 1L) {
-            cat("\nCorrelation of Coefficients:\n")
-            ll <- lower.tri(correl)
-            correl[ll] <- format(round(correl[ll], digits))
-            correl[!ll] <- ""
-            print(correl[-1L, -p, drop = FALSE], quote = FALSE, digits = digits, ...)
-        }
-    }
-    invisible(x)
-}
+## This function has been depreciated / merged into print.summary.zlm()
+#print.summary.rzlm <- function(x, digits = max(3, .Options$digits - 3), ...)
+
 
 ### NOTE: These psi functions are actually weight functions, weight(u) = abs( influence(u) / u).
 ### Traditionally the influence functions are given the symbol psi.
@@ -567,7 +534,7 @@ print.summary.rzlm <- function(x, digits = max(3, .Options$digits - 3), ...)
 psi.huber <- function(u, k = 1.345, deriv=0)
 {
     if(!deriv) return(pmin(1, k / abs(u)))
-    ifelse(abs(u) <= k, complex(modulus = 1, argument = Arg(u) - pi), 0)
+    ifelse(abs(u) <= k,  complex(real = 1, imaginary = -1) * complex(modulus = 1/2, argument = Arg(u)*2), 0)
 }
 
 #' @describeIn psi.huber The weight function of the hampel objective function.
@@ -575,9 +542,9 @@ psi.huber <- function(u, k = 1.345, deriv=0)
 #' @export
 psi.hampel <- function(u, a = 2, b = 4, c = 8, deriv=0)
 {
-    U <- pmin(abs(u) + 1e-50, c)
-    if(!deriv) return(as.vector(ifelse(U <= a, U, ifelse(U <= b, a, a * (c - U) / (c - b) )) / U))
-    ifelse(abs(u) <= c, ifelse(U <= a, complex(modulus = 1, argument = Arg(u) - pi), ifelse(U <= b, 0, complex(modulus = a/(c-b), argument = Arg(u)))), 0)
+  U <- pmin(abs(u) + 1e-50, c)
+  if(!deriv) return(as.vector(ifelse(U <= a, U, ifelse(U <= b, a, a * (c - U) / (c - b) )) / U))
+  ifelse(abs(u) <= c, ifelse(U <= a, complex(real = 1, imaginary = -1) * complex(modulus = a/b, argument = Arg(u)*2), ifelse(U <= b, 0, complex(real = 1, imaginary = -1) * complex(modulus = a/(2*(c-b)), argument = Arg(u)*2))), 0)
 }
 
 #' @describeIn psi.huber The weight function of Tukey's bisquare objective function.
@@ -597,7 +564,7 @@ psi.bisquare <- function(u, c = 4.685, deriv=0)
     t <- (u/c)
     #warning(t)
     #warning(abs(t))
-    ifelse(Mod(t) < 1, complex(imaginary = -1) * (-1 + Conj(t)*t)*(-1 + 5*Conj(t)*t) * complex(modulus = 1, argument = Arg(t))^2, 0)
+    ifelse(Mod(t) < 1, complex(real = 1, imaginary = -1) * (-1 + Conj(t)*t)*(-1 + 5*Conj(t)*t) * complex(modulus = 1/2, argument = Arg(t)*2), 0)
     #return('cat')
   }
 }
@@ -656,22 +623,24 @@ psi.bisquare <- function(u, c = 4.685, deriv=0)
 #         if(!is.matrix(contrast.obj)) sqrt(sum(weights)) else sqrt(colSums(weights))
 # }
 
-#' @describeIn rlm Predict new data based on the model in object. Invokes `predict.lm`.
-#' @param object a `rlm` object; a fit from which you wish to predict new data.
-#' @param newdata new predictor data from which to predict response data. Default is NULL.
-#' @param scale this seems to be ignored. Default is NULL.
-#' @param ... further arguments to be passed to NextMethod().
-#' 
-#' @export
-predict.rzlm <- function (object, newdata = NULL, scale = NULL, ...)
-{
+## I don't think this function is actually necessary, predict.rlm() should work fine
+## Indeed it does. This function / method is now depreciated.
+# @describeIn rlm Predict new data based on the model in object. Invokes `predict.lm`.
+# @param object a `rlm` object; a fit from which you wish to predict new data.
+# @param newdata new predictor data from which to predict response data. Default is NULL.
+# @param scale this seems to be ignored. Default is NULL.
+# @param ... further arguments to be passed to NextMethod().
+# 
+# @export
+#predict.rzlm <- function (object, newdata = NULL, scale = NULL, ...)
+#{
     ## problems with using predict.lm are the scale and
     ## the QR decomp which has been done on down-weighted values.
     ## Only works if explicit weights are given during the call that produced object..?
-    object$qr <- qr(sqrt(object$weights) * object$x)
+#    object$qr <- qr(sqrt(object$weights) * object$x)
     #print('cats') # For debugging.
-    NextMethod(object, scale = object$s, ...) # So this just calls predict.lm on the object.
-}
+#    NextMethod(object, scale = object$s, ...) # So this just calls predict.lm on the object.
+#}
 
 #' Calculate Variance-Covariance Matrix and Pseudo Variance-Covariance Matrix for a Complex Fitted Model Object
 #'
