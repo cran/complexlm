@@ -219,12 +219,14 @@ cov <- function(x, y = NULL, na.rm = FALSE, method = "pearson", use = "everythin
   {
   matdf <- is.matrix(x) || is.data.frame(x) # Is x a matrix or dataframe?
   cll <- match.call()
+  args <- as.list(cll)[-1]
+  cargs <- args[formalArgs(stats::cov)]
   if (matdf) {
-    cll[[1]] <- stats::cov
-    if (is.numeric(x[[1]])) eval(cll, parent.frame())
+    if (is.numeric(x[[1]])) do.call(what = stats::cov, args = cargs[lapply(cargs, length) > 0], envir = parent.frame())
   }
-  cll[[1]] <- stats::var
-  if (is.numeric(x)) eval(cll, parent.frame())
+  #cll[[1]] <- stats::var
+  vargs <- args[formalArgs(stats::var)]
+  if (is.numeric(x)) do.call(what = stats::var, args = vargs[lapply(vargs, length) > 0], envir = parent.frame())
   else
   {
     if (is.data.frame(x)) x <- as.matrix(x)
@@ -296,11 +298,12 @@ cor <- function(x, y = NULL, na.rm = FALSE, use = "everything", method = "pearso
 {
   matdf <- is.matrix(x) || is.data.frame(x) # Is x a matrix or dataframe?
   cll <- match.call()
-  cll[[1]] <- stats::cor
+  args <- as.list(cll)[-1]
+  cargs <- args[formalArgs(stats::cor)]
   if (matdf) {
-    if (is.numeric(x[[1]])) eval(cll, parent.frame())
+    if (is.numeric(x[[1]])) do.call(what = stats::cor, args = cargs[lapply(cargs, length) > 0], envir = parent.frame())
   }
-  if (is.numeric(x)) eval(cll, parent.frame())
+  if (is.numeric(x)) do.call(what = stats::cor, args = cargs[lapply(cargs, length) > 0], envir = parent.frame())
   else
   {
     if (is.data.frame(x)) x <- as.matrix(x)
@@ -362,17 +365,25 @@ cor <- function(x, y = NULL, na.rm = FALSE, use = "everything", method = "pearso
 #' @export
 var <- function(x, y = NULL, na.rm = FALSE, use = "everything", pseudo = FALSE, ...)
 {
+  #print(x)
   matdf <- is.matrix(x) || is.data.frame(x) # Is x a matrix or dataframe?
+  #print(matdf)
   cll <- match.call()
+  args <- as.list(cll)[-1]
+  #print(cll)
   if (matdf) {
-    cll[[1]] <- stats::cov
-    if (is.numeric(x[[1]])) eval(cll, parent.frame())
+    cargs <- args[formalArgs(stats::cov)]
+    if (is.numeric(x[[1]])) do.call(what = stats::cov, args = cargs[lapply(cargs, length) > 0], envir = parent.frame())
   }
-  cll[[1]] <- stats::var
-  if (is.numeric(x)) eval(cll, parent.frame())
+  #cll[[1]] <- stats::var
+  #print(cll)
+  vargs <- args[formalArgs(stats::var)]
+  #print(vargs)
+  #print(lapply(vargs,length))
+  if (is.numeric(x)) do.call(what = stats::var, args = vargs[lapply(vargs, length) > 0], envir = parent.frame())
   else
   {
-    cll <- match.call()
+    #cll <- match.call()
     cll[[1]] <- cov
     vard <- eval(cll, parent.frame())
     if (!is.null(y)) return(vard)
@@ -489,14 +500,13 @@ mahalanobis <- function(x, center, cov, pcov = NULL, inverted=FALSE, ...)
 #' summary method for complex objects
 #' 
 #' The base summary method for complex objects only reports their length and that they are complex..
-#' This improved method returns the mean, median, variance, and pseudo variance of the given complex object.
+#' This improved method returns the length, as well as the mean, median, variance, and pseudo variance of the given complex object.
 #'
 #' @param object a complex vector or scalar.
 #' @param ... additional arguments, not used.
 #' @param digits integer specifying the number of digits to include in the summary values.
 #' 
-#' @return A complex vector containing in order the length, median, mean, variance, and pseudo variance of the object. 
-#' The length element will be a positive integer, despite being in the complex mode.
+#' @return A list containing the length of the object, and a complex named vector containing in the median, mean, variance, and pseudo variance of the object; in that order. 
 #' @export
 #'
 #' @examples
@@ -506,11 +516,13 @@ mahalanobis <- function(x, center, cov, pcov = NULL, inverted=FALSE, ...)
 #' summary(foo)
 summary.complex <- function(object, ..., digits)
 {
-  value <- c(length(object), median(object), mean(object), var(object), var(object, pseudo = TRUE))
+  lengt <- length(object)
+  value <- c(ifelse(length(object) <= 2, mean(object), median(object)), mean(object), var(object), var(object, pseudo = TRUE))
+  # Median function only works for vectors of length 3 or larger, but for smaller vectors median = mean.
   if(!missing(digits)) value <- signif(value, digits)
-  names(value) <- c("length", "median", "mean", "var.", "pvar.")
-  class(value) <- c("summaryDefault", "table")
-  return(value)
+  names(value) <- c("median", "mean", "var.", "pvar.")
+  class(value) <- c("summaryDefault", "summaryComplex", "table")
+  return(list(length = lengt, stats = value))
 }
 
 #' Range For Complex Objects

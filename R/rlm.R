@@ -81,10 +81,10 @@ rlm.formula <-
              wt.method = c("inv.var", "case"),
              model = TRUE, x.ret = TRUE, y.ret = FALSE, contrasts = NULL)
 {
-    trms <- terms(formula)
+    trms <- terms(x = formula, data = data)
     respname <- as.character(attr(trms, "variables")[[attr(trms, "response") + 1]])
     cl <- match.call()
-    if (is.complex(data[[1,respname]]) == FALSE) # Now compatible with tibble input.
+    if (is.complex(data[[respname]]) == FALSE) # Now compatible with tibble input.
     {
       cl[[1]] <- MASS::rlm
       eval(cl, parent.frame())
@@ -298,6 +298,7 @@ rlm.complex <-
             }
         }
         w <- psi(resid/scale)
+        #print(length(w)) #debug
         if(!is.null(wt)) w <- w * weights
         temp <- zlm.wfit(x, y, w, method="qr")
         coef <- temp$coefficients
@@ -414,7 +415,7 @@ summary.rzlm <- function(object, method = c("XtX", "XtWX"),
         rdf <- sum(wts) - p ## 'residual degrees of freedom'
         w <- object$psi(wresid/s)
         S <- sum(as.numeric(wts * (wresid*w)*Conj(wresid*w)))/rdf # The estimated variance of the residuals is analogous to the area of a circle around the estimated parameters, so it is a real number.
-        pS <- sum(wts * (wresid*w)*(wresid*w))/rdf # The estimated pseudo-variance is a complex number that describes the anisotropy of the distribution or set.
+        pS <- sum(wts * (wresid*w)*(wresid*w))/rdf # The estimated pseudo-variance is a complex number that describes the anisotropy of the distribution or set. wresid*w is the influence function
         # Distributions that are less circularly symmetric and more bilaterally symmetric have higher pseudovariance.
         # The direction of the pseudovariance indicates the orientation of the anisotropy; bilateral symmetry axis angle from 
         # the +real axis = pseudovariance angle divided by two. In other words, pseudovariance is the covariance between real and imaginary.
@@ -436,10 +437,11 @@ summary.rzlm <- function(object, method = c("XtX", "XtWX"),
         pS <- sum((wresid*w)*(wresid*w))/rdf # See above definition of pS.
         psiprime <- object$psi(wresid/s, deriv=1) # The derivative of the influence function.
         mn <- mean(psiprime)
-        pvarpsi <- sum((psiprime - mn)^2)/(n-1)
-        kappa <- 1 + p*complexlm::var(psiprime)/(n*as.numeric(Conj(mn)*mn)) # This has something to do with propagation of uncertainty, I think. 
+        #pvarpsi <- sum((psiprime - mn)^2)/(n-1)
+        kappa <- 1 + p*(n-1)*var(psiprime)/(n^2*as.numeric(Conj(mn)*mn)) # This has something to do with propagation of uncertainty, I think. 
         #print(var(psiprime))
-        pkappa <- 1 + p*pvarpsi/(n*mn^2)
+        #pkappa <- 1 + p*pvarpsi/(n*mn^2)
+        pkappa <- 1 + p*(n-1)*var(psiprime, pseudo = TRUE)/(n^2*mn^2)
         stddev <- sqrt(S)*(kappa/abs(mn)) ## Would it be useful to do something similar with pseudo-variance? Probably.
         pstddev <- sqrt(pS)*(pkappa/mn) # The 'pseudo standard deviation', analogous with the pseudo-variance. Might be useful, might be meaningless.
       }
@@ -459,7 +461,8 @@ summary.rzlm <- function(object, method = c("XtX", "XtWX"),
       if(correlation) {
         correl <- rinv * array(1/rowlen, c(p, p))
         correl <- correl %*% Conj(t(correl))
-        pcorrel <- correl %*% t(correl)
+        pcorrel <- rinv * array(1/prowlen, c(p, p))
+        pcorrel <- pcorrel %*% t(pcorrel)
       } else {
         correl <- NULL
         pcorrel <- NULL
@@ -469,7 +472,7 @@ summary.rzlm <- function(object, method = c("XtX", "XtWX"),
       dimnames(coef) <- list(cnames, c("Value", "Std. Error", "Pseudo Std. Error", "t value"))
       #print(rinv)
       coef[, 2] <- rowlen %o% stddev # Fill the 2nd column of the coef array. These should be real numbers. Isn't stddev a single number? What is the point of the outer product? It transposes the vector into a column while multiplying all elements by stddev.
-      coef[, 3] <- rowlen %o% pstddev # The 'pseudo - standard error', these things need better names...
+      coef[, 3] <- prowlen %o% pstddev # The 'pseudo - standard error', these things need better names...
       coef[, 4] <- coef[, 1]/coef[, 2]
       object <- object[c("call", "na.action")]
       object$residuals <- res
@@ -486,7 +489,7 @@ summary.rzlm <- function(object, method = c("XtX", "XtWX"),
       object$correlation <- correl
       object$pseudocorrelation <- pcorrel
       object$terms <- NA
-      class(object) <- c("summary.rzlm", "summary.zlm", "summary.rlm")
+      class(object) <- c("summary.rzlm", "summary.zlm", "summary.rlm", "summary.lm")
       return(object)
 }
 
@@ -534,7 +537,8 @@ summary.rzlm <- function(object, method = c("XtX", "XtWX"),
 psi.huber <- function(u, k = 1.345, deriv=0)
 {
     if(!deriv) return(pmin(1, k / abs(u)))
-    ifelse(abs(u) <= k,  complex(real = 1, imaginary = -1) * complex(modulus = 1/2, argument = Arg(u)*2), 0)
+    dhub <- ifelse(abs(u) <= k, complex(modulus = 1, argument = 0), 0)
+    return(as.vector(dhub)) # Just in case this comes out as a column vector as well.
 }
 
 #' @describeIn psi.huber The weight function of the hampel objective function.
@@ -543,8 +547,12 @@ psi.huber <- function(u, k = 1.345, deriv=0)
 psi.hampel <- function(u, a = 2, b = 4, c = 8, deriv=0)
 {
   U <- pmin(abs(u) + 1e-50, c)
-  if(!deriv) return(as.vector(ifelse(U <= a, U, ifelse(U <= b, a, a * (c - U) / (c - b) )) / U))
-  ifelse(abs(u) <= c, ifelse(U <= a, complex(real = 1, imaginary = -1) * complex(modulus = a/b, argument = Arg(u)*2), ifelse(U <= b, 0, complex(real = 1, imaginary = -1) * complex(modulus = a/(2*(c-b)), argument = Arg(u)*2))), 0)
+  ham <- ifelse(U <= a, 2 * a / b, ifelse(U <= b, a / U, ifelse(U <= c, (a / (b - c)) * (1 - c / U))))
+  #print(ham)
+  if(!deriv) return(as.vector(ham)) # It seems that ham often ends up being a column matrix...
+  #if(!deriv) return(as.vector(ifelse(U <= a, 2 * U * a / b, ifelse(U <= b, a, a * (c - U) / (c - b) )) / U)) # Strange way to write this equation...
+  dham <- ifelse(abs(u) <= c, ifelse(U <= a, 2 * a / b, ifelse(U <= b, 0, a / (b - c))), 0)
+  return(as.vector(dham)) # dham also tends to be a column matrix...
 }
 
 #' @describeIn psi.huber The weight function of Tukey's bisquare objective function.
@@ -564,7 +572,7 @@ psi.bisquare <- function(u, c = 4.685, deriv=0)
     t <- (u/c)
     #warning(t)
     #warning(abs(t))
-    ifelse(Mod(t) < 1, complex(real = 1, imaginary = -1) * (-1 + Conj(t)*t)*(-1 + 5*Conj(t)*t) * complex(modulus = 1/2, argument = Arg(t)*2), 0)
+    ifelse(Mod(t) < 1, (1 - Conj(t)*t) * ( (1 - Conj(t) * t) * complex(modulus = 1, argument = 2 * Arg(t)) - 4 * t^2), 0)
     #return('cat')
   }
 }
@@ -674,8 +682,8 @@ psi.bisquare <- function(u, c = 4.685, deriv=0)
 vcov.rzlm <- function(object, merge = TRUE, ...)
 {
     so <- summary(object, corr = FALSE)
-    print(dim(so$stddev^2))
-    print(dim(so$cov.unscaled))
+    #print(dim(so$stddev^2)) #Debugging help
+    #print(dim(so$cov.unscaled)) #For debugging
     varcovar <- so$stddev^2 * so$cov.unscaled
     pseudovarcovar <- so$pstddev^2 * so$pcov.unscaled
     if (merge == TRUE)
